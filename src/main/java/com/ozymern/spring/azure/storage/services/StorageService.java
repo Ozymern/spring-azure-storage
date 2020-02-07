@@ -1,48 +1,37 @@
 package com.ozymern.spring.azure.storage.services;
 
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.BufferedWriter;
-import java.io.File;
-import java.io.FileWriter;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.Writer;
-import java.net.MalformedURLException;
-import java.net.URL;
-import java.nio.ByteBuffer;
-import java.nio.channels.AsynchronousFileChannel;
-import java.nio.channels.FileChannel;
-import java.nio.file.Files;
-import java.nio.file.Paths;
-import java.nio.file.StandardOpenOption;
-import java.security.InvalidKeyException;
-
-import com.microsoft.azure.storage.blob.BlobRange;
-import com.microsoft.azure.storage.blob.BlockBlobURL;
-import com.microsoft.azure.storage.blob.ContainerURL;
-import com.microsoft.azure.storage.blob.ListBlobsOptions;
-import com.microsoft.azure.storage.blob.PipelineOptions;
-import com.microsoft.azure.storage.blob.ServiceURL;
-import com.microsoft.azure.storage.blob.SharedKeyCredentials;
-import com.microsoft.azure.storage.blob.StorageURL;
-import com.microsoft.azure.storage.blob.TransferManager;
+import com.microsoft.azure.storage.CloudStorageAccount;
+import com.microsoft.azure.storage.StorageCredentialsAccountAndKey;
+import com.microsoft.azure.storage.StorageException;
+import com.microsoft.azure.storage.blob.*;
 import com.microsoft.azure.storage.blob.models.BlobItem;
-import com.microsoft.azure.storage.blob.models.ContainerCreateResponse;
 import com.microsoft.azure.storage.blob.models.ContainerListBlobFlatSegmentResponse;
-import com.microsoft.rest.v2.RestException;
 import com.microsoft.rest.v2.util.FlowableUtil;
-
-import io.reactivex.*;
 import io.reactivex.Flowable;
+import io.reactivex.Single;
 import lombok.Data;
+import org.apache.commons.codec.binary.Base64;
 import org.apache.commons.io.FileUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import sun.misc.BASE64Decoder;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.net.MalformedURLException;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.nio.ByteBuffer;
+import java.nio.channels.AsynchronousFileChannel;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
+import java.security.InvalidKeyException;
 
 @Component
 @Data
@@ -76,16 +65,36 @@ public class StorageService {
 
     }
 
-    public void init()throws InvalidKeyException, MalformedURLException {
+    public String downloadPdfStream(String name) throws URISyntaxException, StorageException, IOException {
+        StorageCredentialsAccountAndKey cred = new StorageCredentialsAccountAndKey(accountName, accountKey);
+        CloudStorageAccount cloudStorageAccount = new CloudStorageAccount(cred, /* useHttps */ true);
+        CloudBlobClient serviceClient = cloudStorageAccount.createCloudBlobClient();
+        CloudBlobContainer cloudBlobContainer = serviceClient.getContainerReference(containerName);
 
-        creds = new SharedKeyCredentials(this.accountName,this.accountKey);
+        CloudBlockBlob cloudBlockBlob1 = new CloudBlockBlob(new URI(cloudBlobContainer.getStorageUri().getPrimaryUri() + "/" + name), cloudStorageAccount.getCredentials());
+
+        InputStream inputStream = cloudBlockBlob1.openInputStream();
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        int data;
+        while ((data = inputStream.read()) >= 0) {
+            outputStream.write(data);
+        }
+
+        inputStream.close();
+        return Base64.encodeBase64String(outputStream.toByteArray());
+
+    }
+
+    public void init() throws InvalidKeyException, MalformedURLException {
+
+        creds = new SharedKeyCredentials(this.accountName, this.accountKey);
         serviceURL = new ServiceURL(new URL(this.storageURL), StorageURL.createPipeline(creds, new PipelineOptions()));
         containerURL = serviceURL.createContainerURL(this.containerName);
 
     }
 
-    private BlockBlobURL createBlockBlobURL(String name){
-        return  containerURL.createBlockBlobURL(name);
+    private BlockBlobURL createBlockBlobURL(String name) {
+        return containerURL.createBlockBlobURL(name);
     }
 
     public void uploadFile(String nameBlob, File sourceFile) throws IOException {
@@ -97,7 +106,8 @@ public class StorageService {
                 LOGGER.info(String.valueOf(response.response().statusCode()));
             });
     }
-    public void uploadPdfBse64(String nameBlob,String data) throws Exception {
+
+    public void uploadPdfBase64(String nameBlob, String data) throws Exception {
         final BlockBlobURL blobURL = this.createBlockBlobURL(nameBlob);
         BASE64Decoder decoder = new BASE64Decoder();
         byte[] decodedBytes = decoder.decodeBuffer(data);
@@ -107,6 +117,7 @@ public class StorageService {
         LOGGER.info("Finished uploading text");
 
     }
+
     public void listBlobs(ContainerURL containerURL) {
         ListBlobsOptions options = new ListBlobsOptions();
         options.withMaxResults(10);
@@ -119,7 +130,7 @@ public class StorageService {
             });
     }
 
-    public  Single<ContainerListBlobFlatSegmentResponse> listAllBlobs(ContainerURL url, ContainerListBlobFlatSegmentResponse response) {
+    public Single<ContainerListBlobFlatSegmentResponse> listAllBlobs(ContainerURL url, ContainerListBlobFlatSegmentResponse response) {
         if (response.body().segment() != null) {
             for (BlobItem b : response.body().segment().blobItems()) {
                 String output = "Blob name: " + b.name();
@@ -144,7 +155,7 @@ public class StorageService {
         }
     }
 
-    public void deleteBlob(String  nameBlob) {
+    public void deleteBlob(String nameBlob) {
 
         final BlockBlobURL blobURL = this.createBlockBlobURL(nameBlob);
         // Delete the blob
@@ -157,6 +168,7 @@ public class StorageService {
     public void getBlob(String nameBlob, File sourceFile) throws IOException {
 
         final BlockBlobURL blobURL = this.createBlockBlobURL(nameBlob);
+
         LOGGER.info(sourceFile.getName());
         AsynchronousFileChannel fileChannel = AsynchronousFileChannel.open(sourceFile.toPath(), StandardOpenOption.CREATE, StandardOpenOption.WRITE);
         LOGGER.info(sourceFile.getName());
@@ -167,7 +179,7 @@ public class StorageService {
             });
     }
 
-    public  void downloadBlob(BlockBlobURL blockBlobURL, File downloadToFile) {
+    public void downloadBlob(BlockBlobURL blockBlobURL, File downloadToFile) {
 
 
         LOGGER.info("Start downloading file %s to %s..." + blockBlobURL.toURL() + downloadToFile);
